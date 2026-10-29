@@ -107,7 +107,7 @@ static void onDecoded(const HabPacket& pkt, float rssi, float snr) {
 
   if (pkt.type == HAB_PKT_TELEM) {
     habPrettyPrintTelem(Serial, pkt, rssi, snr);
-    habCsvLineGround(Serial, pkt, rssi, snr, utc, -1);
+    habCsvLineGroundFlight(Serial, pkt, rssi, snr, utc);
   } else if (pkt.type == HAB_PKT_ACK) {
     int32_t rtt = -1;
     if (g_pingWaiting && pkt.seq == g_pingExpectSeq) {
@@ -115,7 +115,7 @@ static void onDecoded(const HabPacket& pkt, float rssi, float snr) {
       g_pingWaiting = false;
     }
     habPrettyPrintAck(Serial, pkt, rssi, snr, rtt);
-    habCsvLineGround(Serial, pkt, rssi, snr, utc, rtt);
+    habCsvLineGroundPingAck(Serial, pkt, rssi, snr, utc, rtt);
   }
 
   updateOled();
@@ -175,8 +175,12 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println(F("\n=== HAB Ground ==="));
+  Serial.println(F("Laptop test: log USB serial with:"));
+  Serial.println(F("  uv run tools/serial_logger.py /dev/ttyUSB0"));
+  Serial.println(F("Files go under: <repo>/logs/<utc>/{flight,ping}.csv + ground.log"));
   habRadioPrintConfig(Serial);
-  habCsvHeaderGround(Serial);
+  habCsvHeaderGroundFlight(Serial);
+  habCsvHeaderGroundPing(Serial);
   Serial.println(F("Commands: type PING + Enter, or press PRG button"));
 
   pinMode(PIN_PRG_BTN, INPUT_PULLUP);
@@ -216,8 +220,14 @@ void loop() {
   pollSerialCmd();
 
   if (g_pingWaiting && (millis() - g_pingSentMs) > HAB_PING_TIMEOUT_MS) {
+    const uint16_t seq = g_pingExpectSeq;
+    const uint32_t waited = millis() - g_pingSentMs;
     g_pingWaiting = false;
-    Serial.printf("[ground] PING seq=%u TIMEOUT\n", g_pingExpectSeq);
+    Serial.printf("[ground] PING seq=%u TIMEOUT\n", seq);
+    habPrettyPrintPingTimeout(Serial, seq, waited);
+    char utc[24];
+    utcNow(utc, sizeof(utc));
+    habCsvLineGroundPingTimeout(Serial, seq, utc, HAB_PING_TIMEOUT_MS);
     updateOled();
   }
 

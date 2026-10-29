@@ -47,6 +47,9 @@ static size_t encodeSample(const HabSample& s, uint8_t* out) {
   writeI16(out + 22, s.heading_cdeg);
   out[24] = s.sats;
   out[25] = s.flags;
+  out[26] = s.gps_h;
+  out[27] = s.gps_m;
+  out[28] = s.gps_s;
   return HAB_SAMPLE_LEN;
 }
 
@@ -61,11 +64,42 @@ static bool decodeSample(const uint8_t* in, HabSample& s) {
   s.heading_cdeg = readI16(in + 22);
   s.sats         = in[24];
   s.flags        = in[25];
+  s.gps_h        = in[26];
+  s.gps_m        = in[27];
+  s.gps_s        = in[28];
   return true;
 }
 
 void habSampleClear(HabSample& s) {
   memset(&s, 0, sizeof(s));
+  habSampleClearGpsTime(s);
+}
+
+void habSampleSetGpsTime(HabSample& s, uint8_t h, uint8_t m, uint8_t sec) {
+  s.gps_h = h;
+  s.gps_m = m;
+  s.gps_s = sec;
+}
+
+void habSampleClearGpsTime(HabSample& s) {
+  s.gps_h = 0xFF;
+  s.gps_m = 0xFF;
+  s.gps_s = 0xFF;
+}
+
+bool habSampleGpsTimeValid(const HabSample& s) {
+  return s.gps_h != 0xFF && s.gps_m != 0xFF && s.gps_s != 0xFF;
+}
+
+void habSampleFormatGpsTime(const HabSample& s, char* buf, size_t cap) {
+  if (!buf || cap == 0) {
+    return;
+  }
+  if (!habSampleGpsTimeValid(s)) {
+    buf[0] = '\0';
+    return;
+  }
+  snprintf(buf, cap, "%02u:%02u:%02u", s.gps_h, s.gps_m, s.gps_s);
 }
 
 size_t habPacketEncode(const HabPacket& pkt, uint8_t* out, size_t outCap) {
@@ -125,10 +159,14 @@ static void printOptFloat(Print& out, const char* label, bool ok, float v,
 void habPrettyPrintTelem(Print& out, const HabPacket& pkt, float rssi,
                          float snr) {
   const HabSample& s = pkt.sample;
+  char gpsTime[16];
+  habSampleFormatGpsTime(s, gpsTime, sizeof(gpsTime));
+
   out.println(F("---- TELEM ----"));
   out.printf("seq=%u  RSSI=%.1f dBm  SNR=%.1f dB\n", pkt.seq, rssi, snr);
-  out.printf("ts_ms=%lu  sats=%u  flags=0x%02X\n", (unsigned long)s.ts_ms,
-             s.sats, s.flags);
+  out.printf("ts_ms=%lu  gps_time=%s  sats=%u  flags=0x%02X\n",
+             (unsigned long)s.ts_ms, gpsTime[0] ? gpsTime : "n/a", s.sats,
+             s.flags);
 
   if (s.flags & HAB_FLAG_GPS_OK) {
     out.printf("lat=%.7f  lon=%.7f  alt=%.1f m\n", s.lat_e7 / 1e7,
@@ -138,6 +176,10 @@ void habPrettyPrintTelem(Print& out, const HabPacket& pkt, float rssi,
   }
 
   printOptFloat(out, "tilt=", s.flags & HAB_FLAG_IMU_OK, s.tilt_cdeg / 100.0f,
+                " deg");
+  printOptFloat(out, "pitch=", s.flags & HAB_FLAG_IMU_OK, s.pitch_cdeg / 100.0f,
+                " deg");
+  printOptFloat(out, "roll=", s.flags & HAB_FLAG_IMU_OK, s.roll_cdeg / 100.0f,
                 " deg");
   printOptFloat(out, "heading=", s.flags & HAB_FLAG_MAG_OK,
                 s.heading_cdeg / 100.0f, " deg");
@@ -147,9 +189,14 @@ void habPrettyPrintTelem(Print& out, const HabPacket& pkt, float rssi,
 void habPrettyPrintAck(Print& out, const HabPacket& pkt, float rssi, float snr,
                        int32_t rtt_ms) {
   const HabSample& s = pkt.sample;
+  char gpsTime[16];
+  habSampleFormatGpsTime(s, gpsTime, sizeof(gpsTime));
+
   out.println(F("---- ACK ------"));
   out.printf("seq=%u  RTT=%ld ms  RSSI=%.1f  SNR=%.1f\n", pkt.seq,
              (long)rtt_ms, rssi, snr);
+  out.printf("ts_ms=%lu  gps_time=%s\n", (unsigned long)s.ts_ms,
+             gpsTime[0] ? gpsTime : "n/a");
   if (s.flags & HAB_FLAG_GPS_OK) {
     out.printf("lat=%.7f  lon=%.7f  alt=%.1f m\n", s.lat_e7 / 1e7,
                s.lon_e7 / 1e7, s.alt_mm / 1000.0);
@@ -158,66 +205,39 @@ void habPrettyPrintAck(Print& out, const HabPacket& pkt, float rssi, float snr,
   }
   printOptFloat(out, "tilt=", s.flags & HAB_FLAG_IMU_OK, s.tilt_cdeg / 100.0f,
                 " deg");
+  printOptFloat(out, "pitch=", s.flags & HAB_FLAG_IMU_OK, s.pitch_cdeg / 100.0f,
+                " deg");
+  printOptFloat(out, "roll=", s.flags & HAB_FLAG_IMU_OK, s.roll_cdeg / 100.0f,
+                " deg");
   printOptFloat(out, "heading=", s.flags & HAB_FLAG_MAG_OK,
                 s.heading_cdeg / 100.0f, " deg");
   out.println(F("---------------"));
 }
 
-void habCsvHeaderGround(Print& out) {
-  out.println(F("CSV,rx_utc,rssi_dbm,snr_db,type,seq,lat,lon,alt_m,tilt_deg,"
-                "heading_deg,gps_ok,imu_ok,mag_ok,rtt_ms"));
-}
-
-void habCsvLineGround(Print& out, const HabPacket& pkt, float rssi, float snr,
-                      const char* rx_utc, int32_t rtt_ms) {
-  const HabSample& s = pkt.sample;
-  const bool gps = s.flags & HAB_FLAG_GPS_OK;
-  const bool imu = s.flags & HAB_FLAG_IMU_OK;
-  const bool mag = s.flags & HAB_FLAG_MAG_OK;
-
-  out.print(F("CSV,"));
-  out.print(rx_utc ? rx_utc : "");
-  out.printf(",%.1f,%.1f,%u,%u,", rssi, snr, pkt.type, pkt.seq);
-
-  if (gps) {
-    out.printf("%.7f,%.7f,%.3f,", s.lat_e7 / 1e7, s.lon_e7 / 1e7,
-               s.alt_mm / 1000.0);
-  } else {
-    out.print(F(",,,"));
-  }
-
-  if (imu) {
-    out.printf("%.2f,", s.tilt_cdeg / 100.0);
-  } else {
-    out.print(F(","));
-  }
-
-  if (mag) {
-    out.printf("%.2f,", s.heading_cdeg / 100.0);
-  } else {
-    out.print(F(","));
-  }
-
-  out.printf("%d,%d,%d,", gps ? 1 : 0, imu ? 1 : 0, mag ? 1 : 0);
-  if (rtt_ms >= 0) {
-    out.println(rtt_ms);
-  } else {
-    out.println();
-  }
+void habPrettyPrintPingTimeout(Print& out, uint16_t seq, uint32_t waited_ms) {
+  out.println(F("---- PING TIMEOUT ----"));
+  out.printf("seq=%u  waited=%lu ms  (no ACK)\n", seq,
+             (unsigned long)waited_ms);
+  out.println(F("----------------------"));
 }
 
 void habCsvHeaderPayload(Print& out) {
-  out.println(F("ts_ms,gps_time,lat,lon,alt_m,tilt_deg,pitch_deg,roll_deg,"
-                "heading_deg,sats,fix_ok,imu_ok,mag_ok"));
+  out.println(F("ts_ms,gps_time,seq,lat,lon,alt_m,tilt_deg,pitch_deg,roll_deg,"
+                "heading_deg,sats,gps_ok,imu_ok,mag_ok"));
 }
 
-void habCsvLinePayload(Print& out, const HabSample& s, const char* gps_time) {
+void habCsvLinePayload(Print& out, const HabSample& s, const char* gps_time,
+                       int32_t seq) {
   const bool gps = s.flags & HAB_FLAG_GPS_OK;
   const bool imu = s.flags & HAB_FLAG_IMU_OK;
   const bool mag = s.flags & HAB_FLAG_MAG_OK;
 
   out.printf("%lu,", (unsigned long)s.ts_ms);
   out.print(gps_time ? gps_time : "");
+  out.print(',');
+  if (seq >= 0) {
+    out.print((unsigned)seq);
+  }
   out.print(',');
 
   if (gps) {
@@ -241,4 +261,115 @@ void habCsvLinePayload(Print& out, const HabSample& s, const char* gps_time) {
   }
 
   out.printf("%u,%d,%d,%d\n", s.sats, gps ? 1 : 0, imu ? 1 : 0, mag ? 1 : 0);
+}
+
+void habCsvHeaderGroundFlight(Print& out) {
+  out.println(F("FLIGHT,rx_utc,ts_ms,gps_time,seq,lat,lon,alt_m,tilt_deg,"
+                "pitch_deg,roll_deg,heading_deg,sats,gps_ok,imu_ok,mag_ok,"
+                "rssi_dbm,snr_db"));
+}
+
+static void printGroundSampleWithSeq(Print& out, const HabSample& s,
+                                     uint16_t seq) {
+  const bool gps = s.flags & HAB_FLAG_GPS_OK;
+  const bool imu = s.flags & HAB_FLAG_IMU_OK;
+  const bool mag = s.flags & HAB_FLAG_MAG_OK;
+
+  char gpsTime[16];
+  habSampleFormatGpsTime(s, gpsTime, sizeof(gpsTime));
+
+  out.printf("%lu,", (unsigned long)s.ts_ms);
+  out.print(gpsTime);
+  out.printf(",%u,", (unsigned)seq);
+
+  if (gps) {
+    out.printf("%.7f,%.7f,%.3f,", s.lat_e7 / 1e7, s.lon_e7 / 1e7,
+               s.alt_mm / 1000.0);
+  } else {
+    out.print(F(",,,"));
+  }
+
+  if (imu) {
+    out.printf("%.2f,%.2f,%.2f,", s.tilt_cdeg / 100.0, s.pitch_cdeg / 100.0,
+               s.roll_cdeg / 100.0);
+  } else {
+    out.print(F(",,,"));
+  }
+
+  if (mag) {
+    out.printf("%.2f,", s.heading_cdeg / 100.0);
+  } else {
+    out.print(F(","));
+  }
+
+  out.printf("%u,%d,%d,%d", s.sats, gps ? 1 : 0, imu ? 1 : 0, mag ? 1 : 0);
+}
+
+void habCsvLineGroundFlight(Print& out, const HabPacket& pkt, float rssi,
+                            float snr, const char* rx_utc) {
+  out.print(F("FLIGHT,"));
+  out.print(rx_utc ? rx_utc : "");
+  out.print(',');
+  printGroundSampleWithSeq(out, pkt.sample, pkt.seq);
+  out.printf(",%.1f,%.1f\n", rssi, snr);
+}
+
+void habCsvHeaderGroundPing(Print& out) {
+  out.println(F("PING,rx_utc,event,seq,rtt_ms,rssi_dbm,snr_db,ts_ms,gps_time,"
+                "lat,lon,alt_m,tilt_deg,pitch_deg,roll_deg,heading_deg,sats,"
+                "gps_ok,imu_ok,mag_ok"));
+}
+
+void habCsvLineGroundPingAck(Print& out, const HabPacket& pkt, float rssi,
+                             float snr, const char* rx_utc, int32_t rtt_ms) {
+  const HabSample& s = pkt.sample;
+  const bool gps = s.flags & HAB_FLAG_GPS_OK;
+  const bool imu = s.flags & HAB_FLAG_IMU_OK;
+  const bool mag = s.flags & HAB_FLAG_MAG_OK;
+
+  char gpsTime[16];
+  habSampleFormatGpsTime(s, gpsTime, sizeof(gpsTime));
+
+  out.print(F("PING,"));
+  out.print(rx_utc ? rx_utc : "");
+  out.print(F(",ack,"));
+  out.printf("%u,", (unsigned)pkt.seq);
+  if (rtt_ms >= 0) {
+    out.print(rtt_ms);
+  }
+  out.printf(",%.1f,%.1f,%lu,", rssi, snr, (unsigned long)s.ts_ms);
+  out.print(gpsTime);
+  out.print(',');
+
+  if (gps) {
+    out.printf("%.7f,%.7f,%.3f,", s.lat_e7 / 1e7, s.lon_e7 / 1e7,
+               s.alt_mm / 1000.0);
+  } else {
+    out.print(F(",,,"));
+  }
+
+  if (imu) {
+    out.printf("%.2f,%.2f,%.2f,", s.tilt_cdeg / 100.0, s.pitch_cdeg / 100.0,
+               s.roll_cdeg / 100.0);
+  } else {
+    out.print(F(",,,"));
+  }
+
+  if (mag) {
+    out.printf("%.2f,", s.heading_cdeg / 100.0);
+  } else {
+    out.print(F(","));
+  }
+
+  out.printf("%u,%d,%d,%d\n", s.sats, gps ? 1 : 0, imu ? 1 : 0, mag ? 1 : 0);
+}
+
+void habCsvLineGroundPingTimeout(Print& out, uint16_t seq, const char* rx_utc,
+                                 uint32_t waited_ms) {
+  out.print(F("PING,"));
+  out.print(rx_utc ? rx_utc : "");
+  out.print(F(",timeout,"));
+  // Blank: rssi,snr,ts_ms,gps_time,lat,lon,alt,tilt,pitch,roll,heading,sats,flags×3
+  out.printf("%u,-%lu,,,,,,,,,,,,,,,\n", (unsigned)seq,
+             (unsigned long)waited_ms);
 }

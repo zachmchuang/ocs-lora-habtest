@@ -28,7 +28,10 @@ const HabSensorStatus& habSensorsStatus();
 const char* habSensorsSessionDir();
 
 // Append one CSV data row to <session>/flight.csv.
-bool habSensorsLogSample(const HabSample& s, const char* gps_time);
+// Pass telem_seq >= 0 on TELEM TX so ground logs can join on seq (+ ts_ms).
+bool habSensorsLogSample(const HabSample& s, const char* gps_time,
+                         int32_t telem_seq = -1);
 
-// Append a PING RF event (RSSI/SNR) to <session>/ping.csv.
-bool habSensorsLogPing(uint16_t seq, float rssi_dbm, float snr_db);
+// Append a PING RX event to <session>/ping.csv (payload receive time + uplink RF).
+bool habSensorsLogPing(uint16_t seq, float rssi_dbm, float snr_db,
+                       const char* gps_time);

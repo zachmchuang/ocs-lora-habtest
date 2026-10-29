@@ -78,6 +78,8 @@ static void sendTelem() {
   pkt.type   = HAB_PKT_TELEM;
   pkt.seq    = ++g_telemSeq;
   pkt.sample = g_latest;
+  // SD row with seq + same ts_ms as the over-the-air sample (join key vs ground).
+  habSensorsLogSample(g_latest, g_gpsTime, (int32_t)pkt.seq);
   if (transmitPacket(pkt)) {
     Serial.printf("[payload] TELEM seq=%u flags=0x%02X\n", pkt.seq,
                   pkt.sample.flags);
@@ -88,15 +90,18 @@ static void sendTelem() {
 }
 
 static void handlePing(uint16_t seq, float rssi, float snr) {
+  // Fresh sample at receive time (ts_ms + gps_time go OTA in the ACK).
+  habSensorsReadSample(g_latest, g_gpsTime, sizeof(g_gpsTime));
+
   HabPacket pkt = {};
   pkt.type   = HAB_PKT_ACK;
   pkt.seq    = seq;
   pkt.sample = g_latest;
 
   // Log uplink quality of the received PING (before TX clears radio stats).
-  Serial.printf("[payload] PING seq=%u  RSSI=%.1f dBm  SNR=%.1f dB\n", seq,
-                rssi, snr);
-  habSensorsLogPing(seq, rssi, snr);
+  Serial.printf("[payload] PING seq=%u  RSSI=%.1f dBm  SNR=%.1f dB  gps=%s\n",
+                seq, rssi, snr, g_gpsTime[0] ? g_gpsTime : "n/a");
+  habSensorsLogPing(seq, rssi, snr, g_gpsTime);
 
   if (transmitPacket(pkt)) {
     Serial.printf("[payload] ACK seq=%u (reply to RSSI=%.1f SNR=%.1f)\n", seq,

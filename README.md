@@ -26,6 +26,7 @@ Laptop CSV logger (ground USB; needs [uv](https://docs.astral.sh/uv/)):
 
 ```bash
 uv run tools/serial_logger.py /dev/ttyUSB0 logs
+# → logs/<utc>/{flight.csv,ping.csv,ground.log}
 ```
 
 On the ground serial console, type `PING` + Enter, or press the **PRG** button.
@@ -78,21 +79,19 @@ Missing **magnetometer**, **IMU**, or **SD** prints a one-time warning and conti
 
 ## Data formats
 
-**Payload SD** — each boot creates a new folder (`/YYYYMMDD_HHMMSS/` from GPS time, or `/boot_N/` if GPS time is not ready yet) containing:
+OTA packet `ver=2`: TELEM/ACK carry the full sample (incl. GPS time `HH:MM:SS`). PING is header-only.
 
-`flight.csv`:
+**Payload SD** — `/YYYYMMDD_HHMMSS/` (or `/boot_N/`):
 
-`ts_ms,gps_time,lat,lon,alt_m,tilt_deg,pitch_deg,roll_deg,heading_deg,sats,gps_ok,imu_ok,mag_ok`
+- `flight.csv` — `ts_ms,gps_time,seq,lat,lon,alt_m,tilt_deg,pitch_deg,roll_deg,heading_deg,sats,gps_ok,imu_ok,mag_ok`  
+  (`seq` blank on 1 Hz rows; set on TELEM TX — join ground `flight.csv` on `seq` / `ts_ms`)
+- `ping.csv` — `ts_ms,gps_time,seq,rssi_dbm,snr_db` (uplink RF at PING receive)
 
-`ping.csv` (when a ground PING is received / ACK'd):
+**Ground** (`serial_logger.py` → `logs/<utc>/`):
 
-`ts_ms,seq,rssi_dbm,snr_db`
-
-**Ground USB** — pretty blocks plus lines:
-
-`CSV,rx_utc,rssi_dbm,snr_db,type,seq,lat,lon,alt_m,tilt_deg,heading_deg,gps_ok,imu_ok,mag_ok,rtt_ms`
-
-(`serial_logger.py` replaces `rx_utc` with host UTC.)
+- `flight.csv` — TELEM: same sample fields + `rx_utc,rssi_dbm,snr_db`
+- `ping.csv` — `rx_utc,event,seq,rtt_ms,rssi_dbm,snr_db` + ACK sample fields  
+  (`event`=`ack`|`timeout`; timeout blanks sample, `rtt_ms=-<timeout_ms>`)
 
 ## End-to-end bench checklist
 

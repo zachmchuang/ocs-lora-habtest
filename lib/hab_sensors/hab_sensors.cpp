@@ -129,7 +129,7 @@ static bool openSessionLogs() {
     g_logFile.close();
     return false;
   }
-  g_pingFile.println(F("ts_ms,seq,rssi_dbm,snr_db"));
+  g_pingFile.println(F("ts_ms,gps_time,seq,rssi_dbm,snr_db"));
   g_pingFile.flush();
   return true;
 }
@@ -240,27 +240,34 @@ void habSensorsReadSample(HabSample& out, char* gpsTimeBuf, size_t gpsTimeCap) {
     }
     out.flags |= HAB_FLAG_GPS_OK;
   }
-  if (gpsTimeBuf && gpsTimeCap && gps.time.isValid()) {
-    snprintf(gpsTimeBuf, gpsTimeCap, "%02u:%02u:%02u", gps.time.hour(),
-             gps.time.minute(), gps.time.second());
+  if (gps.time.isValid()) {
+    habSampleSetGpsTime(out, (uint8_t)gps.time.hour(),
+                        (uint8_t)gps.time.minute(),
+                        (uint8_t)gps.time.second());
+    if (gpsTimeBuf && gpsTimeCap) {
+      habSampleFormatGpsTime(out, gpsTimeBuf, gpsTimeCap);
+    }
   }
 }
 
-bool habSensorsLogSample(const HabSample& s, const char* gps_time) {
+bool habSensorsLogSample(const HabSample& s, const char* gps_time,
+                         int32_t telem_seq) {
   if (!g_status.sd_ok || !g_logFile) {
     return false;
   }
-  habCsvLinePayload(g_logFile, s, gps_time);
+  habCsvLinePayload(g_logFile, s, gps_time, telem_seq);
   g_logFile.flush();
   return true;
 }
 
-bool habSensorsLogPing(uint16_t seq, float rssi_dbm, float snr_db) {
+bool habSensorsLogPing(uint16_t seq, float rssi_dbm, float snr_db,
+                       const char* gps_time) {
   if (!g_status.sd_ok || !g_pingFile) {
     return false;
   }
-  g_pingFile.printf("%lu,%u,%.1f,%.1f\n", (unsigned long)millis(), seq,
-                    rssi_dbm, snr_db);
+  g_pingFile.printf("%lu,", (unsigned long)millis());
+  g_pingFile.print(gps_time ? gps_time : "");
+  g_pingFile.printf(",%u,%.1f,%.1f\n", seq, rssi_dbm, snr_db);
   g_pingFile.flush();
   return true;
 }
